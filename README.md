@@ -31,7 +31,7 @@ there is no login.
 - **Infrastructure as Code** — every AWS resource defined in Terraform ([`infra/`](infra/)); nothing clicked in the console.
 - **Secretless deploys** — GitHub Actions assumes an IAM role via **OIDC**; no AWS keys stored anywhere ([why](docs/adr/0001-secretless-oidc-deploys.md)).
 - **Clean architecture** — business logic depends on a `Storage` interface, not on DynamoDB; tests run against an in-memory backend.
-- **Container hygiene** — multi-stage build, **non-root** user, image scanning on push.
+- **Least privilege everywhere** — the Lambda's role can touch only the one DynamoDB table; the deploy role can touch only this ECR repo + this function. ECR scans images on push.
 - **Tested in CI** — `ruff` + `pytest` on every push and PR.
 
 ## Architecture
@@ -83,9 +83,9 @@ var payload = JsonUtility.ToJson(new {
 
 ## Deploy
 
-Storage and the deploy role are provisioned by Terraform — see
-[`infra/README.md`](infra/README.md). The Lambda + Function URL wiring is the next
-milestone (below); the data layer (DynamoDB) and secretless pipeline are in place.
+All infrastructure is Terraform. Because a container-image Lambda needs its image
+to exist first, deploy is two applies (base infra → CI pushes image → serving
+layer). Full walkthrough in [`infra/README.md`](infra/README.md).
 
 ## Cost
 
@@ -98,7 +98,7 @@ quiet week costs essentially nothing.
 - [x] Leaderboard API with a storage abstraction (in-memory + DynamoDB)
 - [x] Tests, CI (lint/test/build), secretless OIDC pipeline to ECR
 - [x] DynamoDB table (Terraform)
-- [ ] **Next:** Lambda + Function URL wiring (live HTTPS endpoint) + first real deploy
+- [x] Lambda + Function URL serving layer (live HTTPS endpoint)
 - [ ] Per-player history (`GET /scores/{player_id}`)
 - [ ] **Phase 1+:** AI NPC companion service — NPCs chat with players via a dedicated app
 

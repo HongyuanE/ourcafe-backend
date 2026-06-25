@@ -15,3 +15,19 @@ variable "github_repo" {
   type        = string
   default     = "ourcafe-backend"
 }
+
+variable "deploy_lambda" {
+  description = <<-EOT
+    Whether to create the Lambda function + Function URL. Keep false for the first
+    apply (the container image must exist in ECR first); flip to true for the
+    second apply once CI has pushed an image.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "image_tag" {
+  description = "ECR image tag the Lambda is first created from. CI updates it thereafter."
+  type        = string
+  default     = "latest"
+}

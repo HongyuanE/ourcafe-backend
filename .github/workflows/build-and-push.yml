@@ -45,3 +45,18 @@ jobs:
           docker push "$REGISTRY/$REPOSITORY:$IMAGE_TAG"
           docker push "$REGISTRY/$REPOSITORY:latest"
           echo "Pushed $REGISTRY/$REPOSITORY:$IMAGE_TAG"
+
+      - name: Update Lambda to the new image (once it exists)
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          REPOSITORY: ourcafe-backend
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          if aws lambda get-function --function-name ourcafe-backend >/dev/null 2>&1; then
+            aws lambda update-function-code \
+              --function-name ourcafe-backend \
+              --image-uri "$REGISTRY/$REPOSITORY:$IMAGE_TAG" >/dev/null
+            echo "Updated Lambda to $IMAGE_TAG"
+          else
+            echo "Lambda not provisioned yet — run 'terraform apply -var=deploy_lambda=true' to create it."
+          fi

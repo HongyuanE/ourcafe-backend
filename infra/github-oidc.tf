@@ -75,3 +75,25 @@ resource "aws_iam_role_policy" "ecr_push" {
     ]
   })
 }
+
+data "aws_caller_identity" "current" {}
+data "aws_region" "current" {}
+
+# Lets the deploy pipeline point the Lambda at a freshly-pushed image. Scoped to
+# this one function. The ARN is constructed (not a resource reference) so the
+# permission exists even before the function itself is created.
+resource "aws_iam_role_policy" "lambda_deploy" {
+  name = "lambda-deploy"
+  role = aws_iam_role.github_actions.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["lambda:UpdateFunctionCode", "lambda:GetFunction"]
+        Resource = "arn:aws:lambda:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:function:${var.github_repo}"
+      }
+    ]
+  })
+}

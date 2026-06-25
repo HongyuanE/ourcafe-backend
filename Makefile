@@ -1,4 +1,4 @@
-.PHONY: install test lint fmt run docker-build docker-run compose-up tf-init tf-plan
+.PHONY: install test lint fmt run image tf-init tf-plan tf-apply tf-apply-lambda
 
 install:        ## Install dev dependencies
 	pip install -r requirements-dev.txt
@@ -12,20 +12,20 @@ lint:           ## Static checks
 fmt:            ## Auto-format / fix
 	ruff check --fix .
 
-run:            ## Run the app locally (no container)
+run:            ## Run the app locally with hot reload (no container, no AWS)
 	uvicorn app.main:app --reload
 
-docker-build:   ## Build the container image
-	docker build -t iac-cicd-pipeline:local .
-
-docker-run:     ## Run the container locally on :8000
-	docker run --rm -p 8000:8000 iac-cicd-pipeline:local
-
-compose-up:     ## Build + run via docker compose
-	docker compose up --build
+image:          ## Build the Lambda container image (CI does this for real)
+	docker build -t ourcafe-backend:local .
 
 tf-init:        ## Initialise Terraform
 	cd infra && terraform init
 
 tf-plan:        ## Preview infrastructure changes
 	cd infra && terraform plan
+
+tf-apply:       ## Apply base infra (ECR, DynamoDB, IAM/OIDC) — run this first
+	cd infra && terraform apply
+
+tf-apply-lambda: ## Apply with the serving layer (run after CI has pushed an image)
+	cd infra && terraform apply -var="deploy_lambda=true"

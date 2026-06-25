@@ -17,3 +17,8 @@ output "dynamodb_table_name" {
   description = "Set as the app's DYNAMODB_TABLE env var (with STORAGE_BACKEND=dynamodb)."
   value       = aws_dynamodb_table.leaderboard.name
 }
+
+output "lambda_function_url" {
+  description = "Public HTTPS endpoint for the leaderboard API (set after deploy_lambda=true)."
+  value       = var.deploy_lambda ? aws_lambda_function_url.api[0].function_url : null
+}
