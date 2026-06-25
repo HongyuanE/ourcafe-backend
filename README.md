@@ -12,6 +12,8 @@
 ![Serverless](https://img.shields.io/badge/Runtime-Lambda%20%2B%20DynamoDB-FF9900?logo=awslambda&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
 
+**🔴 Live:** `https://v5o7z543fh.execute-api.ap-southeast-2.amazonaws.com` — try [`/health`](https://v5o7z543fh.execute-api.ap-southeast-2.amazonaws.com/health) or [`/leaderboard`](https://v5o7z543fh.execute-api.ap-southeast-2.amazonaws.com/leaderboard).
+
 ## What it does (today)
 
 A small HTTP API that records and ranks leaderboard scores. In Ourcafe a "score"
@@ -37,7 +39,7 @@ there is no login.
 ## Architecture
 
 ```
- Unity game ──POST /scores──▶  API Gateway / Function URL
+ Unity game ──POST /scores──▶  API Gateway (HTTP API)
                                       │
                                       ▼
                               AWS Lambda  (FastAPI via Mangum — same code as local)
@@ -98,7 +100,7 @@ quiet week costs essentially nothing.
 - [x] Leaderboard API with a storage abstraction (in-memory + DynamoDB)
 - [x] Tests, CI (lint/test/build), secretless OIDC pipeline to ECR
 - [x] DynamoDB table (Terraform)
-- [x] Lambda + Function URL serving layer (live HTTPS endpoint)
+- [x] Lambda + API Gateway serving layer (live HTTPS endpoint)
 - [ ] Per-player history (`GET /scores/{player_id}`)
 - [ ] **Phase 1+:** AI NPC companion service — NPCs chat with players via a dedicated app
 

@@ -52,13 +52,13 @@ Once an image is in ECR:
 
 ```bash
 terraform apply -var="deploy_lambda=true"
-terraform output lambda_function_url       # your live HTTPS endpoint
+terraform output api_endpoint       # your live HTTPS endpoint
 ```
 
 Test it:
 
 ```bash
-URL=$(terraform output -raw lambda_function_url)
+URL=$(terraform output -raw api_endpoint)
 curl -X POST "$URL/scores" -H 'content-type: application/json' \
      -d '{"player_id":"demo-1","player_name":"Hongyuan","score":4200}'
 curl "$URL/leaderboard"

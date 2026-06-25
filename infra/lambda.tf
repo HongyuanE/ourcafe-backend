@@ -75,26 +75,4 @@ resource "aws_lambda_function" "api" {
   depends_on = [aws_cloudwatch_log_group.lambda]
 }
 
-# ---- Public HTTPS endpoint ----
-resource "aws_lambda_function_url" "api" {
-  count              = var.deploy_lambda ? 1 : 0
-  function_name      = aws_lambda_function.api[0].function_name
-  authorization_type = "NONE" # public; submit endpoint is intentionally open (see ADR 0002)
-
-  cors {
-    allow_origins = ["*"]
-    allow_methods = ["GET", "POST"]
-    allow_headers = ["content-type"]
-  }
-}
-
-# A public (AuthType NONE) Function URL still needs an explicit resource policy
-# allowing anyone to invoke it — Terraform does not add this automatically.
-resource "aws_lambda_permission" "public_url" {
-  count                  = var.deploy_lambda ? 1 : 0
-  statement_id           = "AllowPublicFunctionUrlInvoke"
-  action                 = "lambda:InvokeFunctionUrl"
-  function_name          = aws_lambda_function.api[0].function_name
-  principal              = "*"
-  function_url_auth_type = "NONE"
-}
+# The public HTTPS front door is an API Gateway HTTP API — see apigateway.tf.

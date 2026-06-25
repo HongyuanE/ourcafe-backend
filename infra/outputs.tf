@@ -18,7 +18,7 @@ output "dynamodb_table_name" {
   value       = aws_dynamodb_table.leaderboard.name
 }
 
-output "lambda_function_url" {
+output "api_endpoint" {
   description = "Public HTTPS endpoint for the leaderboard API (set after deploy_lambda=true)."
-  value       = var.deploy_lambda ? aws_lambda_function_url.api[0].function_url : null
+  value       = var.deploy_lambda ? aws_apigatewayv2_api.http[0].api_endpoint : null
 }

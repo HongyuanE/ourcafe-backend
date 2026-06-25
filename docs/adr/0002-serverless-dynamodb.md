@@ -65,3 +65,19 @@ HMAC on the request — not full user accounts.
   workload: the ALB alone is ~AU$20/month to keep a near-idle service alive.
 - **Relational DB (RDS)** — overkill for one tiny table, and not free at rest
   beyond the 12-month trial. Rejected.
+
+## Update (2026-06-25): front door is API Gateway, not a Function URL
+
+Originally the Lambda was exposed via a **Lambda Function URL** (simplest, no API
+Gateway). In practice, public (`AuthType: NONE`) Function-URL invokes returned
+`AccessDeniedException` on this account despite a verified-correct resource policy
+(the function itself worked fine via direct invoke, and an unauthenticated CORS
+preflight succeeded — so it was specifically the anonymous-invoke authorization).
+
+Rather than keep fighting an opaque account-level behaviour, the serving layer was
+switched to an **API Gateway HTTP API** (`apigateway.tf`): public by default,
+served from the standard `execute-api` endpoint, and the more conventional
+serverless front door. The Lambda, DynamoDB, and pipeline were unchanged.
+
+**Lesson:** when a managed-service primitive misbehaves despite correct config,
+pivoting to the better-trodden path beats burning hours on a black box.
