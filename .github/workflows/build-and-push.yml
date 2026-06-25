@@ -1,0 +1,47 @@
+name: Build and Push to ECR
+
+# Pushes a container image to Amazon ECR on every merge to main.
+# Authentication is via GitHub OIDC — NO long-lived AWS keys are stored as secrets.
+# The IAM role and its trust policy are provisioned by Terraform (see infra/).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # required to request the OIDC token
+  contents: read
+
+jobs:
+  build-push:
+    # Skips cleanly until AWS_ROLE_ARN is set (i.e. until the infra is deployed),
+    # so a freshly-published repo shows green CI instead of a failed deploy.
+    if: ${{ vars.AWS_ROLE_ARN != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC, no stored secrets)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}   # set from `terraform output github_actions_role_arn`
+          aws-region: ${{ vars.AWS_REGION }}          # e.g. ap-southeast-2
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          REPOSITORY: ourcafe-backend
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build \
+            --build-arg GIT_SHA="$IMAGE_TAG" \
+            -t "$REGISTRY/$REPOSITORY:$IMAGE_TAG" \
+            -t "$REGISTRY/$REPOSITORY:latest" .
+          docker push "$REGISTRY/$REPOSITORY:$IMAGE_TAG"
+          docker push "$REGISTRY/$REPOSITORY:latest"
+          echo "Pushed $REGISTRY/$REPOSITORY:$IMAGE_TAG"
