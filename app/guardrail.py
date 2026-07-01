@@ -58,15 +58,22 @@ async def guardrail_chat(req: GuardrailChatRequest, request: Request):
     if not api_key:
         return JSONResponse(status_code=503, content={"error": "capacity"})
 
-    # turn budget: history holds prior (user, assistant) pairs → count assistant turns used
+    # Turn budget: count Lucia's prior replies; the reply we're about to generate is next.
+    # Soft-wrap from soft_wrap_turn onward; hard-end (and signal the client to terminate the
+    # round) at hard_end_turn — regardless of whether the model plays along.
     used = sum(1 for t in req.history if t.role == "assistant")
-    remaining = max(0, settings.turns_per_round - used - 1)
-    must_conclude = remaining <= 0
+    reply_num = used + 1
+    if reply_num >= settings.hard_end_turn:
+        wrap = "hard"
+    elif reply_num >= settings.soft_wrap_turn:
+        wrap = "soft"
+    else:
+        wrap = "none"
+    conclude = reply_num >= settings.hard_end_turn
     messages = build_messages(
         history=[t.model_dump() for t in req.history],
         user_input=req.user_input,
-        remaining_turns=remaining,
-        must_conclude=must_conclude,
+        wrap=wrap,
     )
 
     async def event_stream():
@@ -87,7 +94,7 @@ async def guardrail_chat(req: GuardrailChatRequest, request: Request):
         except Exception:  # provider/balance failure → graceful capacity signal
             yield f"data: {_dumps({'done': True, 'capacity': True})}\n\n"
             return
-        final = {"done": True, "conclude": must_conclude, "ttft_ms": ttft_ms or 0, **usage}
+        final = {"done": True, "conclude": conclude, "ttft_ms": ttft_ms or 0, **usage}
         yield f"data: {_dumps(final)}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
