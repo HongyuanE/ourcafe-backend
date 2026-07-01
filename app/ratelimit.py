@@ -88,8 +88,11 @@ class DynamoDBRateLimiter(RateLimiter):
         self._salt = salt
 
     def start_round(self, ip: str) -> RoundDecision:
-        from boto3.dynamodb.conditions import Key  # noqa: F401 (kept for parity/readability)
-
+        # KNOWN CAVEAT: this read-modify-write is NOT atomic — two simultaneous
+        # new-round requests from one IP can both read the same count and each be
+        # granted a round. Acceptable here because the prepaid OpenRouter balance is
+        # the hard cost ceiling; if strict fairness ever matters, switch to
+        # update_item with an atomic "ADD count 1" + a ConditionExpression.
         now = time.time()
         day = _utc_today()
         key = {"pk": f"RL#{hash_ip(ip, self._salt)}", "sk": day}
