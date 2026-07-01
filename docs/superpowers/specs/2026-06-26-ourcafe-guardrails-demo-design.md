@@ -1,0 +1,185 @@
+# OurCafe Guardrails — public de-hallucination demo (design spec)
+
+**Date:** 2026-06-26
+**Repos:** `HongyuanE/ourcafe-backend` (proxy, this repo — branch `feat/guardrail-proxy`) + a new `HongyuanE/ourcafe-guardrails` (frontend, GitHub Pages)
+**Source pilot:** `D:\OurCafe\Ourcafe_Unity_Project\Ourcafe_Documents\LLM_Testing\happy_conversation\` (`happy_sim.html`, `system_prompt_FINAL.md`, `prompt_pack.md`, `run_eval.py`)
+
+## Goal
+
+Ship a public, zero-setup, recruiter-facing web demo of the OurCafe NPC chat that
+demonstrably resists prompt-injection / gaslighting / role-switching, and that visibly
+shows its efficiency (time-to-first-token, tokens, cost). It exists to prove the developer
+is an *engineer of reliable AI systems* — not a prompt hobbyist — by pairing a working,
+attackable demo with real receipts (the existing eval kit).
+
+Portfolio framing: "reliability engineering applied to AI." The demo is the third live
+flagship (after ourcafe-backend leaderboard and the portfolio site).
+
+## Locked decisions (from brainstorming, 2026-06-26)
+
+1. **Access:** free public demo via a **secure server-side proxy** — visitor just clicks and
+   chats; no key entry.
+2. **Proxy home:** extend **ourcafe-backend** (new endpoint on the existing FastAPI + Mangum
+   Lambda). No new backend service.
+3. **Persona/language:** the OurCafe café NPC (celebrating passing an exam), rewritten in
+   **English** to welcome any stranger visitor. Bilingual is out of scope for v1.
+4. **Demo depth:** full playground — NPC chat + one-click attack buttons + defense log +
+   **visual** speed/token/cost indicators.
+5. **Model:** **locked** to `google/gemini-3.1-flash-lite`, server-side. **No model switcher.
+   No system-prompt reveal.** Visitors cannot see or change the model or the guardrails.
+6. **Telemetry is visual:** a live speed gauge (TTFT / tokens-per-sec) and a token+cost
+   readout that ticks up as the response streams — not a plain table.
+7. **Frontend host:** dedicated **`ourcafe-guardrails`** repo → GitHub Pages, with its own
+   README + ADR.
+8. **Local-first:** the whole system must run locally (proxy via `uvicorn`, frontend against
+   `localhost`) with the key in a `.env`, so the English system prompt can be iterated and
+   attacks tested **before any deploy**. Deploy is the final step, only once satisfied.
+
+## The critical correctness rule
+
+**All guardrails and the system prompt live server-side in the proxy — never in the browser.**
+The client sends only the visitor's turn + short recent history; the proxy composes the full
+guarded prompt and calls the model. If the defense sat in client JS, "leak the system prompt"
+would be trivially won by opening devtools. Server-side enforcement is what makes the demo
+honest and the "leak the prompt" attack genuinely unwinnable.
+
+## Architecture
+
+```
+Browser (ourcafe-guardrails, GitHub Pages)
+  │  POST /guardrail-chat  { history[], userInput, attackType? }   (CORS-locked origin)
+  ▼
+ourcafe-backend  (FastAPI + Mangum on Lambda; uvicorn locally)
+  │  - compose guarded prompt (server-side system prompt + turn state)
+  │  - rate-limit check (per-IP daily cap + global monthly spend cap)
+  │  - call OpenRouter (google/gemini-3.1-flash-lite, stream=True)
+  │  - stream tokens back (SSE); final event carries token usage + server TTFT
+  ▼
+OpenRouter → Gemini 3.1 Flash-Lite
+```
+
+Existing API Gateway already proxies all paths to the single Lambda (Mangum), so no new API
+Gateway route resource is required — only the new FastAPI route. Same code path runs under
+`uvicorn` locally.
+
+## Backend components (ourcafe-backend)
+
+### New: `app/guardrail.py`
+- `POST /guardrail-chat` FastAPI route returning a streaming response (SSE).
+- Request model `GuardrailChatRequest`: `history: list[Turn]` (bounded, e.g. last 6 turns),
+  `user_input: str`, `attack_type: str | None` (one of the known one-click categories, or
+  null for free text).
+- Composes the prompt: server-side English system prompt + a per-turn user message mirroring
+  the pilot's structure (scene, NPC, tone, remaining turns, must-conclude flag, the visitor's
+  input). History is included to fix the stateless-contradiction gap the pilot README flags.
+- Calls OpenRouter via `httpx.AsyncClient` with `stream=True` and
+  `stream_options={"include_usage": true}`; measures TTFT server-side; streams text chunks to
+  the client as SSE `data:` events, then a final `event: usage` with
+  `{prompt_tokens, completion_tokens, ttft_ms}`.
+- Model id constant `MODEL = "google/gemini-3.1-flash-lite"`; temperature 0.1 (matches pilot).
+
+### New: `app/prompts/npc_system_prompt_en.md`
+- The English system prompt, ported from `system_prompt_FINAL.md`, preserving every defense
+  layer: role confinement, identity lockdown (no fabricated memories), scope boundaries (no
+  future meetups / contact swaps), no game-state mutation, turn-budget control. Loaded at
+  startup. **This is the file the developer iterates on locally.**
+
+### New: rate limiting — extend the existing storage pattern
+- Add a small `RateLimiter` abstraction mirroring `Storage`: `InMemoryRateLimiter` (local/tests)
+  and `DynamoDBRateLimiter` (deployed), selected by `STORAGE_BACKEND`.
+- Per-IP daily cap (default 20 messages/IP/day): counter keyed by `hash(ip)+date`, DynamoDB
+  item with TTL (auto-expiry, no PII retained). IP hashed (salted) — never stored raw.
+- Global monthly spend cap: a single counter item accumulating estimated tokens/spend; when it
+  exceeds the configured ceiling, the endpoint returns a graceful `429`-style "demo at capacity"
+  payload the frontend renders as a friendly state.
+- Reuse the existing DynamoDB table (add these items under distinct `pk` values) — no new table.
+
+### Config / secrets
+- `OPENROUTER_API_KEY` — local: `.env` (git-ignored); Lambda: injected as an env var sourced
+  from AWS SSM Parameter Store (SecureString) via Terraform. Never in code or client.
+- New env: `GUARDRAIL_ALLOWED_ORIGIN` (CORS), `RATE_LIMIT_PER_IP_DAILY`, `MONTHLY_SPEND_CAP_USD`.
+- Add `httpx` to `requirements.txt`; `python-dotenv` (dev) for local `.env` loading.
+
+### CORS
+- Add FastAPI `CORSMiddleware` limited to the demo origin
+  (`https://hongyuane.github.io`) plus `http://localhost:*` for local dev.
+
+### Infra (Terraform)
+- `lambda.tf`: add the new env vars; grant the Lambda role `ssm:GetParameter` on the OpenRouter
+  key parameter.
+- `dynamodb.tf`: enable TTL on the table (attribute `ttl`) for rate-limit items.
+- New ADR `docs/adr/0003-llm-proxy-guardrails.md`: why server-side guardrails, locked model,
+  rate-limit + spend-cap, cost/latency rationale.
+
+## Frontend components (ourcafe-guardrails repo)
+
+Single-page app (may evolve directly from `happy_sim.html`; framework optional — plain
+HTML/TS or a tiny Vite app, implementer's call, but keep it one small deployable). Navy/amber
+theme matching the portfolio.
+
+- **Chat panel:** NPC bubbles with token streaming; visitor input box.
+- **One-click attacks:** buttons for `prompt injection`, `gaslight`, `role-switch`,
+  `leak prompt`, `off-topic`, each sending a canned adversarial input with its `attack_type`.
+- **Defense log:** when an attack turn completes, append a "held / refused" entry naming the
+  attack category. Driven by the known `attack_type` (for one-click) — v1 does not attempt
+  server-side classification of free-text attacks (shows a neutral "guardrails active").
+- **Visual telemetry:** a speed gauge (fed by `ttft_ms` and tokens/sec derived from the stream)
+  and a token + running-cost readout that animates upward during streaming. Cost = tokens ×
+  fixed published Gemini-3.1-Flash-Lite rate (constant in the frontend). Static "Gemini 3.1
+  Flash-Lite" label — no dropdown.
+- **Config:** `API_BASE` switch (`http://localhost:8000` for dev, the prod API Gateway URL for
+  deploy).
+- **Capacity state:** friendly rendering when the proxy returns "demo at capacity."
+- **"How it works ↗":** link to the repo README/ADR (the receipts).
+
+### Eval kit (receipts) in the frontend repo
+- Port `prompt_pack.md` (12 scenarios) to English and include it.
+- Adapt `run_eval.py` to target the `/guardrail-chat` proxy; include the rubric. This doubles
+  as the demo's regression test and as public proof of rigor.
+
+## Local-first workflow (must work before any deploy)
+
+1. `cd ourcafe-backend`, create `.env` with `OPENROUTER_API_KEY=...`, `STORAGE_BACKEND=memory`,
+   `GUARDRAIL_ALLOWED_ORIGIN=http://localhost:5173`.
+2. `uvicorn app.main:app --reload` (serves `/guardrail-chat` on `localhost:8000`).
+3. Run the frontend locally (`API_BASE=http://localhost:8000`); chat, fire every attack button,
+   watch the telemetry.
+4. Iterate on `app/prompts/npc_system_prompt_en.md`; re-test. Optionally run the adapted
+   `run_eval.py` against `localhost` for a mechanical pass over all 12 scenarios.
+5. Only once satisfied: deploy backend (push branch → existing OIDC CI/CD) and frontend
+   (GitHub Pages).
+
+## Testing
+
+- **Unit (pytest, in-memory backend, mocked OpenRouter):** prompt assembly includes the system
+  prompt + history + turn state; `attack_type` handling; rate-limiter increments and trips the
+  per-IP and global caps; graceful capacity response. No real network in unit tests.
+- **Eval (integration):** adapted `run_eval.py` over the 12 scenarios against a running proxy
+  (local first) — Format, turn-budget, Safety (S05–S08 injection/rudeness/off-topic), Language
+  as per the existing rubric.
+- **Manual:** every one-click attack live; confirm the NPC holds and the defense log + telemetry
+  update; confirm the system prompt is not retrievable via any input.
+- **Deploy checks:** backend health after deploy; CORS from the Pages origin; a real end-to-end
+  chat on the live demo.
+
+## Portfolio integration (separate small change to old-portfolio, after the demo is live)
+
+- Projects page: a live "OurCafe Guardrails" card linking to the demo (framed as reliability +
+  efficiency for AI).
+- Home: one teaser line under the hero linking to the demo.
+
+## Out of scope (YAGNI)
+
+Bilingual toggle; visitor-facing model switcher; any system-prompt visibility; accounts/auth;
+conversation persistence; server-side free-text attack classification; the in-game Unity wiring
+(separate track); the AI-Agile project (its own future flagship).
+
+## Success criteria
+
+- A recruiter with no setup opens the demo, clicks "prompt injection," and watches the NPC stay
+  in character while the defense log says "held" and the speed/cost indicators show sub-2s,
+  fractions-of-a-cent responses.
+- The system prompt and model are not exposed or changeable from the client.
+- The public endpoint cannot be abused into meaningful cost (per-IP daily cap + global monthly
+  spend cap enforced).
+- The eval kit is runnable and public, backing the robustness claims with a rubric and scores.
