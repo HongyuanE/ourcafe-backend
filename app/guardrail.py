@@ -78,7 +78,9 @@ class GuardrailChatRequest(BaseModel):
 
 def _client_ip(request: Request) -> str:
     fwd = request.headers.get("x-forwarded-for")
-    return fwd.split(",")[0].strip() if fwd else (request.client.host if request.client else "unknown")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
 
 
 @router.post("/guardrail-chat")
@@ -86,8 +88,10 @@ async def guardrail_chat(req: GuardrailChatRequest, request: Request):
     if req.new_round:
         decision = rate_limiter.start_round(_client_ip(request))
         if not decision.allowed:
-            return JSONResponse(status_code=429,
-                                content={"error": "rate_limited", "retry_after": decision.retry_after})
+            return JSONResponse(
+                status_code=429,
+                content={"error": "rate_limited", "retry_after": decision.retry_after},
+            )
 
     api_key = os.getenv("OPENROUTER_API_KEY", "")  # read at request time (test-friendly)
     if not api_key:
@@ -141,7 +145,12 @@ async def guardrail_chat(req: GuardrailChatRequest, request: Request):
         except Exception:  # provider/balance failure → graceful capacity signal
             yield f"data: {_dumps({'done': True, 'capacity': True})}\n\n"
             return
-        final = {"done": True, "conclude": conclude or model_ended, "ttft_ms": ttft_ms or 0, **usage}
+        final = {
+            "done": True,
+            "conclude": conclude or model_ended,
+            "ttft_ms": ttft_ms or 0,
+            **usage,
+        }
         yield f"data: {_dumps(final)}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

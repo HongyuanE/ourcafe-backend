@@ -104,7 +104,9 @@ class DynamoDBRateLimiter(RateLimiter):
         if decision.allowed:
             # midnight-UTC + 2 days TTL keeps the row well past the day it covers
             ttl = int(now) + 2 * 86400
-            self._table.put_item(Item={**key, "count": count + 1, "last_start": int(now), "ttl": ttl})
+            self._table.put_item(
+                Item={**key, "count": count + 1, "last_start": int(now), "ttl": ttl}
+            )
         return decision
 
 

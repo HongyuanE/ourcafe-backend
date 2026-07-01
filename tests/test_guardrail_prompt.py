@@ -1,4 +1,4 @@
-from app.guardrail_prompt import build_messages, SYSTEM_PROMPT
+from app.guardrail_prompt import SYSTEM_PROMPT, build_messages
 
 
 def test_system_prompt_loaded():

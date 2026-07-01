@@ -29,7 +29,9 @@ class Settings:
     ip_hash_salt: str = ""
 
     def __init__(self) -> None:
-        object.__setattr__(self, "model", os.getenv("GUARDRAIL_MODEL", "google/gemini-3.1-flash-lite"))
+        object.__setattr__(
+            self, "model", os.getenv("GUARDRAIL_MODEL", "google/gemini-3.1-flash-lite")
+        )
         object.__setattr__(self, "temperature", float(os.getenv("GUARDRAIL_TEMPERATURE", "0.1")))
         object.__setattr__(self, "free_rounds", _int("FREE_ROUNDS", 5))
         object.__setattr__(self, "max_rounds_per_day", _int("MAX_ROUNDS_PER_DAY", 10))

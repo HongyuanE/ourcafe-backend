@@ -1,4 +1,3 @@
-import json
 from fastapi.testclient import TestClient
 
 
@@ -38,7 +37,9 @@ def test_end_tag_is_stripped_and_concludes(monkeypatch):
 
     from app.main import app
     client = TestClient(app)
-    r = client.post("/guardrail-chat", json={"history": [], "user_input": "thanks", "new_round": True})
+    r = client.post(
+        "/guardrail-chat", json={"history": [], "user_input": "thanks", "new_round": True}
+    )
     body = r.text
     assert "Enjoy your coffee!" in body
     assert "[[" not in body                 # tag fully stripped, no leak
@@ -57,7 +58,9 @@ def test_more_tag_is_stripped_without_concluding(monkeypatch):
 
     from app.main import app
     client = TestClient(app)
-    r = client.post("/guardrail-chat", json={"history": [], "user_input": "a latte", "new_round": True})
+    r = client.post(
+        "/guardrail-chat", json={"history": [], "user_input": "a latte", "new_round": True}
+    )
     body = r.text
     assert "Anything else?" in body
     assert "[[" not in body                 # tag stripped
@@ -70,12 +73,16 @@ def test_round_limit_denies_after_cap(monkeypatch):
     import app.guardrail as g
     from app.ratelimit import InMemoryRateLimiter
     # swap in a tiny limiter directly — robust against import-time env capture
-    monkeypatch.setattr(g, "rate_limiter",
-                        InMemoryRateLimiter(free_rounds=1, max_rounds_per_day=1, cooldown_seconds=30))
+    monkeypatch.setattr(
+        g, "rate_limiter",
+        InMemoryRateLimiter(free_rounds=1, max_rounds_per_day=1, cooldown_seconds=30),
+    )
     from app.main import app
     client = TestClient(app)
     ok = client.post("/guardrail-chat", json={"history": [], "user_input": "hi", "new_round": True})
     assert ok.status_code == 200
-    denied = client.post("/guardrail-chat", json={"history": [], "user_input": "hi", "new_round": True})
+    denied = client.post(
+        "/guardrail-chat", json={"history": [], "user_input": "hi", "new_round": True}
+    )
     assert denied.status_code == 429
     assert denied.json()["error"] == "rate_limited"

@@ -1,4 +1,4 @@
-from app.ratelimit import InMemoryRateLimiter, RoundDecision
+from app.ratelimit import InMemoryRateLimiter
 
 
 def make(now=1000.0):
@@ -28,7 +28,7 @@ def test_rounds_six_to_ten_need_cooldown():
 
 def test_eleventh_round_denied_for_the_day():
     rl, clock = make()
-    for i in range(10):
+    for _ in range(10):
         rl.start_round("ip")
         clock["t"] += 30               # satisfy every cooldown
     d = rl.start_round("ip")           # 11th
