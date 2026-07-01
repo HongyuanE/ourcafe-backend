@@ -11,11 +11,23 @@ import os
 from datetime import UTC, datetime
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
+from .config import Settings as _Settings
+from .guardrail import router as guardrail_router
 from .models import ScoreEntry, ScoreSubmission
 from .storage import get_storage
 
 app = FastAPI(title="ourcafe-backend", version="0.1.0")
+
+_settings = _Settings()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[_settings.allowed_origin, "http://localhost:5173"],
+    allow_methods=["POST", "GET"],
+    allow_headers=["*"],
+)
+app.include_router(guardrail_router)
 
 GIT_SHA = os.getenv("GIT_SHA", "dev")
 storage = get_storage()
