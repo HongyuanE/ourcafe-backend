@@ -31,3 +31,9 @@ variable "image_tag" {
   type        = string
   default     = "latest"
 }
+
+variable "ip_hash_salt" {
+  description = "Salt used when hashing client IPs for the per-IP rate limiter. Override in production; the default is safe for a public demo."
+  type        = string
+  default     = "ourcafe-demo-salt"
+}
