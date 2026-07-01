@@ -29,6 +29,41 @@ def _dumps(obj: object) -> str:
     return json.dumps(obj, separators=(",", ":"))
 
 
+# Lucia ends EVERY reply with exactly one silent control tag: [[END]] when the interaction is
+# finished, [[MORE]] when it should continue. Always-present tags are followed far more
+# reliably by small models than a single conditional marker. We strip whichever tag from the
+# client-visible text; [[END]] additionally ends the round early (a natural end, before the
+# hard cap). The tags are chosen to be vanishingly unlikely in real café dialogue.
+END_TAG = "[[END]]"
+CONTINUE_TAG = "[[MORE]]"
+_TAGS = (END_TAG, CONTINUE_TAG)
+_MAX_TAG = max(len(t) for t in _TAGS)
+
+
+def _scan_tags(buffer: str) -> tuple[str, str, bool]:
+    """Process a growing buffer for the control tags.
+
+    Returns ``(emit, held, ended)``:
+    - ``emit``: text that is safe to stream to the client now (never contains a tag).
+    - ``held``: a suffix kept back because it might still grow into a tag.
+    - ``ended``: True if a complete [[END]] tag was seen.
+    """
+    for tag in _TAGS:
+        i = buffer.find(tag)
+        if i != -1:
+            return buffer[:i], buffer[i + len(tag):], tag == END_TAG
+    # No complete tag — hold back the longest suffix that could be a partial tag.
+    for k in range(min(_MAX_TAG - 1, len(buffer)), 0, -1):
+        suffix = buffer[-k:]
+        if any(t.startswith(suffix) for t in _TAGS):
+            return buffer[:-k], suffix, False
+    return buffer, "", False
+
+
+def _is_partial_tag(text: str) -> bool:
+    return bool(text) and any(t.startswith(text) for t in _TAGS)
+
+
 class Turn(BaseModel):
     role: str
     content: str
@@ -80,21 +115,33 @@ async def guardrail_chat(req: GuardrailChatRequest, request: Request):
         start = time.monotonic()
         ttft_ms = None
         usage = {"prompt_tokens": 0, "completion_tokens": 0}
+        pending = ""          # held-back tail that might be a partial SENTINEL
+        model_ended = False   # Lucia emitted the end-marker → natural end
         try:
             async for kind, payload in stream_completion(
                 messages=messages, model=settings.model,
                 api_key=api_key, temperature=settings.temperature,
             ):
-                if kind == "text":
-                    if ttft_ms is None:
-                        ttft_ms = int((time.monotonic() - start) * 1000)
-                    yield f"data: {_dumps({'t': payload})}\n\n"
-                elif kind == "usage":
+                if kind == "usage":
                     usage = payload
+                    continue
+                if model_ended:
+                    continue  # ignore anything after the end tag
+                if ttft_ms is None:
+                    ttft_ms = int((time.monotonic() - start) * 1000)
+                pending += payload
+                emit, pending, ended = _scan_tags(pending)
+                if emit:
+                    yield f"data: {_dumps({'t': emit})}\n\n"
+                if ended:
+                    model_ended = True
+            # Flush any leftover tail, unless it's a dangling partial tag (drop that).
+            if pending and not model_ended and not _is_partial_tag(pending):
+                yield f"data: {_dumps({'t': pending})}\n\n"
         except Exception:  # provider/balance failure → graceful capacity signal
             yield f"data: {_dumps({'done': True, 'capacity': True})}\n\n"
             return
-        final = {"done": True, "conclude": conclude, "ttft_ms": ttft_ms or 0, **usage}
+        final = {"done": True, "conclude": conclude or model_ended, "ttft_ms": ttft_ms or 0, **usage}
         yield f"data: {_dumps(final)}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
