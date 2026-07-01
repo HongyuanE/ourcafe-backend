@@ -34,7 +34,8 @@ resource "aws_iam_role_policy_attachment" "lambda_logs" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
-# Least privilege: the function may only PutItem/Query the leaderboard table.
+# Least privilege: leaderboard uses PutItem/Query; the guardrail rate limiter also
+# reads its per-IP counter with GetItem.
 resource "aws_iam_role_policy" "lambda_dynamodb" {
   name = "dynamodb-access"
   role = aws_iam_role.lambda_exec.id
@@ -44,7 +45,7 @@ resource "aws_iam_role_policy" "lambda_dynamodb" {
     Statement = [
       {
         Effect   = "Allow"
-        Action   = ["dynamodb:PutItem", "dynamodb:Query"]
+        Action   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query"]
         Resource = aws_dynamodb_table.leaderboard.arn
       }
     ]
