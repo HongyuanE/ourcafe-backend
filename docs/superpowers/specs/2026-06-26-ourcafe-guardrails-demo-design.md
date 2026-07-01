@@ -2,15 +2,18 @@
 
 **Date:** 2026-06-26
 **Repos:** `HongyuanE/ourcafe-backend` (proxy, this repo — branch `feat/guardrail-proxy`) + a new `HongyuanE/ourcafe-guardrails` (frontend, GitHub Pages)
-**Source pilot:** `D:\OurCafe\Ourcafe_Unity_Project\Ourcafe_Documents\LLM_Testing\happy_conversation\` (`happy_sim.html`, `system_prompt_FINAL.md`, `prompt_pack.md`, `run_eval.py`)
+**Source pilot:** `D:\OurCafe\Ourcafe_Unity_Project\Ourcafe_Documents\LLM_Testing\happy_conversation\` — reuse `happy_sim.html` (streaming chat UI) and `system_prompt_FINAL.md` (guardrail prompt to translate).
+
+> **Not part of this project:** the `prompt_pack.md` / `run_eval.py` / 12-scenario kit in that folder was a one-off **internal model-selection bake-off** (already concluded — Gemini 3.1 Flash-Lite won). It is neither ported, published, nor deployed here, and the testing plan does not depend on it.
 
 ## Goal
 
 Ship a public, zero-setup, recruiter-facing web demo of the OurCafe NPC chat that
 demonstrably resists prompt-injection / gaslighting / role-switching, and that visibly
 shows its efficiency (time-to-first-token, tokens, cost). It exists to prove the developer
-is an *engineer of reliable AI systems* — not a prompt hobbyist — by pairing a working,
-attackable demo with real receipts (the existing eval kit).
+is an *engineer of reliable AI systems* — not a prompt hobbyist. The proof is the working,
+attackable demo itself plus its visible cost/latency indicators; the design rationale lives in
+an ADR.
 
 Portfolio framing: "reliability engineering applied to AI." The demo is the third live
 flagship (after ourcafe-backend leaderboard and the portfolio site).
@@ -108,8 +111,9 @@ Gateway route resource is required — only the new FastAPI route. Same code pat
 - `lambda.tf`: add the new env vars; grant the Lambda role `ssm:GetParameter` on the OpenRouter
   key parameter.
 - `dynamodb.tf`: enable TTL on the table (attribute `ttl`) for rate-limit items.
-- New ADR `docs/adr/0003-llm-proxy-guardrails.md`: why server-side guardrails, locked model,
-  rate-limit + spend-cap, cost/latency rationale.
+- New ADR `docs/adr/0003-llm-proxy-guardrails.md`: why server-side guardrails, the locked model
+  (Gemini 3.1 Flash-Lite, chosen via an internal evaluation — kit not shipped), rate-limit +
+  spend-cap, cost/latency rationale.
 
 ## Frontend components (ourcafe-guardrails repo)
 
@@ -130,12 +134,7 @@ theme matching the portfolio.
 - **Config:** `API_BASE` switch (`http://localhost:8000` for dev, the prod API Gateway URL for
   deploy).
 - **Capacity state:** friendly rendering when the proxy returns "demo at capacity."
-- **"How it works ↗":** link to the repo README/ADR (the receipts).
-
-### Eval kit (receipts) in the frontend repo
-- Port `prompt_pack.md` (12 scenarios) to English and include it.
-- Adapt `run_eval.py` to target the `/guardrail-chat` proxy; include the rubric. This doubles
-  as the demo's regression test and as public proof of rigor.
+- **"How it works ↗":** link to the repo README/ADR explaining the engineering.
 
 ## Local-first workflow (must work before any deploy)
 
@@ -144,8 +143,8 @@ theme matching the portfolio.
 2. `uvicorn app.main:app --reload` (serves `/guardrail-chat` on `localhost:8000`).
 3. Run the frontend locally (`API_BASE=http://localhost:8000`); chat, fire every attack button,
    watch the telemetry.
-4. Iterate on `app/prompts/npc_system_prompt_en.md`; re-test. Optionally run the adapted
-   `run_eval.py` against `localhost` for a mechanical pass over all 12 scenarios.
+4. Iterate on `app/prompts/npc_system_prompt_en.md`; re-test by firing each attack button and
+   free-text probes until the voice and defenses feel right.
 5. Only once satisfied: deploy backend (push branch → existing OIDC CI/CD) and frontend
    (GitHub Pages).
 
@@ -154,11 +153,10 @@ theme matching the portfolio.
 - **Unit (pytest, in-memory backend, mocked OpenRouter):** prompt assembly includes the system
   prompt + history + turn state; `attack_type` handling; rate-limiter increments and trips the
   per-IP and global caps; graceful capacity response. No real network in unit tests.
-- **Eval (integration):** adapted `run_eval.py` over the 12 scenarios against a running proxy
-  (local first) — Format, turn-budget, Safety (S05–S08 injection/rudeness/off-topic), Language
-  as per the existing rubric.
-- **Manual:** every one-click attack live; confirm the NPC holds and the defense log + telemetry
-  update; confirm the system prompt is not retrievable via any input.
+- **Manual (primary robustness check):** fire every one-click attack live and try free-text
+  injection/gaslighting/role-switch/exfiltration probes; confirm the NPC holds, the defense log +
+  telemetry update, and the system prompt is not retrievable via any input. Do this locally
+  first, then again on the deployed demo.
 - **Deploy checks:** backend health after deploy; CORS from the Pages origin; a real end-to-end
   chat on the live demo.
 
@@ -182,4 +180,5 @@ conversation persistence; server-side free-text attack classification; the in-ga
 - The system prompt and model are not exposed or changeable from the client.
 - The public endpoint cannot be abused into meaningful cost (per-IP daily cap + global monthly
   spend cap enforced).
-- The eval kit is runnable and public, backing the robustness claims with a rubric and scores.
+- The robustness is self-evident: a visitor can attack it live and watch it hold, with no
+  ability to see or alter the model or the guardrails.
