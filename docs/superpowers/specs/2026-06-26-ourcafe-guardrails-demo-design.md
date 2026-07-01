@@ -50,7 +50,7 @@ honest and the "leak the prompt" attack genuinely unwinnable.
 
 ```
 Browser (ourcafe-guardrails, GitHub Pages)
-  │  POST /guardrail-chat  { history[], userInput, attackType? }   (CORS-locked origin)
+  │  POST /guardrail-chat  { history[], userInput, attackType?, newRound }   (CORS-locked origin)
   ▼
 ourcafe-backend  (FastAPI + Mangum on Lambda; uvicorn locally)
   │  - compose guarded prompt (server-side system prompt + turn state)
@@ -71,7 +71,9 @@ Gateway route resource is required — only the new FastAPI route. Same code pat
 - `POST /guardrail-chat` FastAPI route returning a streaming response (SSE).
 - Request model `GuardrailChatRequest`: `history: list[Turn]` (bounded, e.g. last 6 turns),
   `user_input: str`, `attack_type: str | None` (one of the known one-click categories, or
-  null for free text).
+  null for free text), `new_round: bool` (true on the first message of a session → triggers the
+  round-limit check). The server tracks the round's `remaining_turns`/`must_conclude_now` from
+  the history length and returns `done` when the budget is spent.
 - Composes the prompt: server-side English system prompt + a per-turn user message mirroring
   the pilot's structure (scene, NPC, tone, remaining turns, must-conclude flag, the visitor's
   input). History is included to fix the stateless-contradiction gap the pilot README flags.
@@ -87,20 +89,33 @@ Gateway route resource is required — only the new FastAPI route. Same code pat
   future meetups / contact swaps), no game-state mutation, turn-budget control. Loaded at
   startup. **This is the file the developer iterates on locally.**
 
-### New: rate limiting — extend the existing storage pattern
+### New: rate limiting — tiered, round-based, per IP
+- A **round** = one conversation session. It begins when the visitor starts a new chat and ends
+  when the model emits `done=true` or the visitor clicks reset. Each round is itself bounded by a
+  **turn budget** (server-enforced `remaining_turns` + `must_conclude_now`, ~5 turns / 5–7
+  sentences, reusing the pilot's mechanism) so a single round can't be held open to spam tokens.
+- Tiered per-IP daily allowance on **starting a round**:
+  - Rounds 1–5: start immediately.
+  - Rounds 6–10: a 30s cooldown must elapse since the previous round before starting.
+  - Round 11+: denied until the next day.
+  - Resets daily, per IP.
 - Add a small `RateLimiter` abstraction mirroring `Storage`: `InMemoryRateLimiter` (local/tests)
-  and `DynamoDBRateLimiter` (deployed), selected by `STORAGE_BACKEND`.
-- Per-IP daily cap (default 20 messages/IP/day): counter keyed by `hash(ip)+date`, DynamoDB
-  item with TTL (auto-expiry, no PII retained). IP hashed (salted) — never stored raw.
-- Global monthly spend cap: a single counter item accumulating estimated tokens/spend; when it
-  exceeds the configured ceiling, the endpoint returns a graceful `429`-style "demo at capacity"
-  payload the frontend renders as a friendly state.
-- Reuse the existing DynamoDB table (add these items under distinct `pk` values) — no new table.
+  and `DynamoDBRateLimiter` (deployed), selected by `STORAGE_BACKEND`. It stores, per IP per day,
+  `{rounds_started, last_round_start_ts}` in one DynamoDB item keyed by `hash(ip)#date` with a TTL
+  that expires at end of day (auto-reset, no PII — IP is salted-hashed, never stored raw). Reuse
+  the existing table under a distinct `pk`; no new table.
+- The proxy enforces the round check when a request carries `new_round: true`; within-round turns
+  are governed by the turn budget, not the round counter.
+- **Global cost ceiling = the prepaid OpenRouter balance (<$10).** No separate spend-cap counter.
+  If the balance is exhausted (or OpenRouter returns any provider error), the proxy catches it and
+  returns a graceful "demo at capacity" payload the frontend renders as a friendly state. Worst-case
+  abuse loss is bounded by that balance and is acceptable.
 
 ### Config / secrets
 - `OPENROUTER_API_KEY` — local: `.env` (git-ignored); Lambda: injected as an env var sourced
   from AWS SSM Parameter Store (SecureString) via Terraform. Never in code or client.
-- New env: `GUARDRAIL_ALLOWED_ORIGIN` (CORS), `RATE_LIMIT_PER_IP_DAILY`, `MONTHLY_SPEND_CAP_USD`.
+- New env (with defaults): `GUARDRAIL_ALLOWED_ORIGIN` (CORS), `FREE_ROUNDS=5`,
+  `MAX_ROUNDS_PER_DAY=10`, `ROUND_COOLDOWN_SECONDS=30`, `TURNS_PER_ROUND=5`, `IP_HASH_SALT`.
 - Add `httpx` to `requirements.txt`; `python-dotenv` (dev) for local `.env` loading.
 
 ### CORS
@@ -112,13 +127,13 @@ Gateway route resource is required — only the new FastAPI route. Same code pat
   key parameter.
 - `dynamodb.tf`: enable TTL on the table (attribute `ttl`) for rate-limit items.
 - New ADR `docs/adr/0003-llm-proxy-guardrails.md`: why server-side guardrails, the locked model
-  (Gemini 3.1 Flash-Lite, chosen via an internal evaluation — kit not shipped), rate-limit +
-  spend-cap, cost/latency rationale.
+  (Gemini 3.1 Flash-Lite, chosen via an internal evaluation — kit not shipped), the tiered
+  round rate-limit + finite-balance ceiling, cost/latency rationale.
 
 ## Frontend components (ourcafe-guardrails repo)
 
-Single-page app (may evolve directly from `happy_sim.html`; framework optional — plain
-HTML/TS or a tiny Vite app, implementer's call, but keep it one small deployable). Navy/amber
+A **tiny Vite app (vanilla TS, no UI framework)** — one small deployable, streaming + gauges in
+plain TS, easy GitHub Pages deploy. Port the chat/streaming logic from `happy_sim.html`. Navy/amber
 theme matching the portfolio.
 
 - **Chat panel:** NPC bubbles with token streaming; visitor input box.
@@ -133,7 +148,12 @@ theme matching the portfolio.
   Flash-Lite" label — no dropdown.
 - **Config:** `API_BASE` switch (`http://localhost:8000` for dev, the prod API Gateway URL for
   deploy).
-- **Capacity state:** friendly rendering when the proxy returns "demo at capacity."
+- **Round status + reset:** a "new chat / reset" control that ends the current round; a small
+  rounds-remaining indicator; when in the cooldown tier (rounds 6–10), a 30s countdown before a new
+  round can start; a clear "come back tomorrow" state after round 10. The client sends
+  `newRound: true` on the first message of each session.
+- **Capacity state:** friendly rendering when the proxy returns "demo at capacity" (balance
+  exhausted / provider error) or a rate-limit response.
 - **"How it works ↗":** link to the repo README/ADR explaining the engineering.
 
 ## Local-first workflow (must work before any deploy)
@@ -151,8 +171,9 @@ theme matching the portfolio.
 ## Testing
 
 - **Unit (pytest, in-memory backend, mocked OpenRouter):** prompt assembly includes the system
-  prompt + history + turn state; `attack_type` handling; rate-limiter increments and trips the
-  per-IP and global caps; graceful capacity response. No real network in unit tests.
+  prompt + history + turn state; `attack_type` handling; the tiered round limiter (rounds 1–5
+  free, 6–10 gated by the 30s cooldown, 11+ denied, daily reset); turn-budget produces `done`;
+  graceful capacity/provider-error response. No real network in unit tests.
 - **Manual (primary robustness check):** fire every one-click attack live and try free-text
   injection/gaslighting/role-switch/exfiltration probes; confirm the NPC holds, the defense log +
   telemetry update, and the system prompt is not retrievable via any input. Do this locally
@@ -178,7 +199,7 @@ conversation persistence; server-side free-text attack classification; the in-ga
   in character while the defense log says "held" and the speed/cost indicators show sub-2s,
   fractions-of-a-cent responses.
 - The system prompt and model are not exposed or changeable from the client.
-- The public endpoint cannot be abused into meaningful cost (per-IP daily cap + global monthly
-  spend cap enforced).
+- The public endpoint cannot be abused into meaningful cost (tiered per-IP round limit + the
+  finite prepaid OpenRouter balance as the hard ceiling).
 - The robustness is self-evident: a visitor can attack it live and watch it hold, with no
   ability to see or alter the model or the guardrails.
