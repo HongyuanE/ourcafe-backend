@@ -54,7 +54,7 @@ Browser (ourcafe-guardrails, GitHub Pages)
   ▼
 ourcafe-backend  (FastAPI + Mangum on Lambda; uvicorn locally)
   │  - compose guarded prompt (server-side system prompt + turn state)
-  │  - rate-limit check (per-IP daily cap + global monthly spend cap)
+  │  - rate-limit check (tiered per-IP round limit; balance is the global ceiling)
   │  - call OpenRouter (google/gemini-3.1-flash-lite, stream=True)
   │  - stream tokens back (SSE); final event carries token usage + server TTFT
   ▼
