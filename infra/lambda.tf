@@ -3,6 +3,14 @@
 # is true — the image must exist in ECR first (pushed by CI), so the first apply
 # provisions everything else, then a second apply (deploy_lambda=true) adds this.
 
+# ---- SSM parameters ----
+# The OpenRouter API key is stored as an SSM SecureString by the operator out-of-band;
+# Terraform only reads it here — the secret value never appears in state as plaintext.
+data "aws_ssm_parameter" "openrouter_key" {
+  name            = "/ourcafe/openrouter_api_key"
+  with_decryption = true
+}
+
 # ---- Execution role ----
 data "aws_iam_policy_document" "lambda_assume" {
   statement {
@@ -43,6 +51,23 @@ resource "aws_iam_role_policy" "lambda_dynamodb" {
   })
 }
 
+# Least privilege: the function may only read the single OpenRouter key parameter.
+resource "aws_iam_role_policy" "lambda_ssm" {
+  name = "ssm-openrouter-key"
+  role = aws_iam_role.lambda_exec.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["ssm:GetParameter"]
+        Resource = "arn:aws:ssm:*:*:parameter/ourcafe/openrouter_api_key"
+      }
+    ]
+  })
+}
+
 # Bounded log retention — keeps CloudWatch costs from creeping.
 resource "aws_cloudwatch_log_group" "lambda" {
   name              = "/aws/lambda/${var.github_repo}"
@@ -61,8 +86,11 @@ resource "aws_lambda_function" "api" {
 
   environment {
     variables = {
-      STORAGE_BACKEND = "dynamodb"
-      DYNAMODB_TABLE  = aws_dynamodb_table.leaderboard.name
+      STORAGE_BACKEND          = "dynamodb"
+      DYNAMODB_TABLE           = aws_dynamodb_table.leaderboard.name
+      OPENROUTER_API_KEY       = data.aws_ssm_parameter.openrouter_key.value
+      GUARDRAIL_ALLOWED_ORIGIN = "https://hongyuane.github.io"
+      IP_HASH_SALT             = var.ip_hash_salt
     }
   }
 

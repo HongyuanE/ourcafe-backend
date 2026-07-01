@@ -19,4 +19,12 @@ resource "aws_dynamodb_table" "leaderboard" {
     name = "sk"
     type = "S"
   }
+
+  # TTL: the guardrail rate-limiter writes items with a `ttl` Unix epoch attribute.
+  # DynamoDB deletes them automatically once that timestamp passes, so the table
+  # never accumulates stale rate-limit windows.
+  ttl {
+    attribute_name = "ttl"
+    enabled        = true
+  }
 }
